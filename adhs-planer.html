@@ -121,6 +121,8 @@ select{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/
 .task-xp{font-size:12px;color:var(--green);font-weight:500}
 .task-times{display:flex;gap:5px;font-size:11px}
 .est-ai{color:var(--blue)}.est-real{color:var(--green)}
+.del-btn{width:32px;height:32px;border-radius:50%;border:0.5px solid var(--border);background:transparent;color:var(--text3);font-size:14px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all .15s;-webkit-appearance:none}
+.del-btn:active{background:var(--red-bg);border-color:var(--red-border);color:var(--red-text);transform:scale(.92)}
 .legend{display:flex;gap:12px;font-size:11px;margin-bottom:8px}
 .legend span{display:flex;align-items:center;gap:4px;color:var(--text2)}
 .ldot{width:7px;height:7px;border-radius:50%}
@@ -249,7 +251,10 @@ select{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/
 
   <div class="row-between" style="margin-bottom:8px">
     <div class="sec" style="margin:0">Bereich</div>
-    <button class="btn btn-blue btn-xs" onclick="estimateAll()" id="estBtn">KI schätzt ↗</button>
+    <div style="display:flex;gap:6px">
+      <button class="btn btn-xs" style="color:var(--red-text);border-color:var(--red-border)" onclick="deleteDoneTasks()" id="delDoneBtn">Erledigte löschen</button>
+      <button class="btn btn-blue btn-xs" onclick="estimateAll()" id="estBtn">KI schätzt ↗</button>
+    </div>
   </div>
   <div class="room-tabs" id="roomTabs"></div>
 
@@ -455,11 +460,13 @@ let S={
 };
 
 const API_URL='https://api.anthropic.com/v1/messages';
+const API_HEADERS={'Content-Type':'application/json','anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'};
 
 async function callAI(prompt,maxTokens=600){
-  const r=await fetch(API_URL,{method:'POST',headers:{'Content-Type':'application/json'},
+  const r=await fetch(API_URL,{method:'POST',headers:API_HEADERS,
     body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:maxTokens,messages:[{role:'user',content:prompt}]})});
   const d=await r.json();
+  if(d.error)throw new Error(d.error.message);
   return d.content.filter(c=>c.type==='text').map(c=>c.text).join('');
 }
 
@@ -523,16 +530,17 @@ function render(){
 
   const visible=S.activeRoom==='Alle'?S.tasks:S.tasks.filter(t=>t.room===S.activeRoom);
   document.getElementById('taskList').innerHTML=visible.map(t=>`
-    <div class="task-card${t.done?' done':''}${t.id===S.currentId?' cur':''}" onclick="selectTask(${t.id})">
-      <div class="chk"><div class="chk-i"></div></div>
-      <div class="task-body"><div class="task-room">${t.room}</div><div class="task-name">${t.name}</div></div>
-      <div class="task-right">
+    <div class="task-card${t.done?' done':''}${t.id===S.currentId?' cur':''}" id="tc-${t.id}">
+      <div class="chk" onclick="selectTask(${t.id})"><div class="chk-i"></div></div>
+      <div class="task-body" onclick="selectTask(${t.id})"><div class="task-room">${t.room}</div><div class="task-name">${t.name}</div></div>
+      <div class="task-right" onclick="selectTask(${t.id})">
         <div class="task-xp">+${t.xp} XP</div>
         <div class="task-times">
           <span class="est-ai">${t.aiMin?t.aiMin+'m':'?'}</span>
           ${t.realMin?`<span class="est-real">${t.realMin}m</span>`:''}
         </div>
       </div>
+      <button class="del-btn" onclick="event.stopPropagation();deleteTask(${t.id})" title="Aufgabe löschen">🗑</button>
     </div>`).join('');
 
   const cur=S.tasks.find(t=>t.id===S.currentId)||S.tasks.find(t=>!t.done);
@@ -551,6 +559,33 @@ function render(){
 }
 
 function setRoom(r){S.activeRoom=r;render();}
+
+function deleteTask(id){
+  const t=S.tasks.find(x=>x.id===id);if(!t)return;
+  // Animate out
+  const card=document.getElementById('tc-'+id);
+  if(card){
+    card.style.transition='opacity .2s,transform .2s,max-height .25s,margin .25s,padding .25s';
+    card.style.opacity='0';card.style.transform='translateX(40px)';card.style.maxHeight='0';
+    card.style.marginBottom='0';card.style.paddingTop='0';card.style.paddingBottom='0';
+    card.style.overflow='hidden';
+  }
+  setTimeout(()=>{
+    S.tasks=S.tasks.filter(x=>x.id!==id);
+    if(S.currentId===id)S.currentId=(S.tasks.find(x=>!x.done)||{}).id||null;
+    render();
+  },220);
+  toast(`"${t.name.substring(0,25)}" gelöscht`);
+}
+
+function deleteDoneTasks(){
+  const count=S.tasks.filter(t=>t.done).length;
+  if(!count){toast('Keine erledigten Aufgaben');return;}
+  if(!confirm(`${count} erledigte Aufgabe${count!==1?'n':''} wirklich löschen?`))return;
+  S.tasks=S.tasks.filter(t=>!t.done);
+  render();
+  toast(`${count} erledigte Aufgabe${count!==1?'n':''} gelöscht`);
+}
 
 function selectTask(id){
   const t=S.tasks.find(x=>x.id===id);if(!t||t.done)return;
@@ -786,8 +821,10 @@ async function analyzePhotos(){
   uploadedFiles.forEach((f,i)=>{content.push({type:'image',source:{type:'base64',media_type:f.type||'image/jpeg',data:f.data.split(',')[1]}});content.push({type:'text',text:`Bild ${i+1}`});});
   content.push({type:'text',text:`ADHS-Aufräum-KI. Analysiere Bilder. Lernkontext:\n${learnCtx()}\n\nErstelle konkrete Aufgaben (max 20Min), Zeiten aus Lerndata anpassen.\nNUR JSON: {"tasks":[{"name":"...","room":"...","min":10,"reason":"was ich sehe"}]}`});
   try{
-    const res=await fetch(API_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:1500,messages:[{role:'user',content}]})});
-    const d=await res.json();const txt=d.content.filter(c=>c.type==='text').map(c=>c.text).join('');
+    const res=await fetch(API_URL,{method:'POST',headers:API_HEADERS,body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:1500,messages:[{role:'user',content}]})});
+    const d=await res.json();
+    if(d.error)throw new Error(d.error.message);
+    const txt=d.content.filter(c=>c.type==='text').map(c=>c.text).join('');
     const parsed=JSON.parse(txt.replace(/```json|```/g,'').trim());
     S.extractedTasks=parsed.tasks||[];
     document.getElementById('extList').innerHTML=S.extractedTasks.map((t,i)=>`
@@ -799,7 +836,7 @@ async function analyzePhotos(){
         </div>
         <button class="btn btn-xs ext-add" onclick="addExt(${i})">+ Übernehmen</button>
       </div>`).join('');
-  }catch{document.getElementById('extList').innerHTML='<div class="ai-out">Analyse fehlgeschlagen.</div>';}
+  }catch(err){document.getElementById('extList').innerHTML=`<div class="ai-out">Analyse fehlgeschlagen: ${err.message||'Unbekannter Fehler'}.<br><br>Mögliche Ursachen:<br>• Kein API-Schlüssel hinterlegt<br>• Bilder zu groß (max. ~4MB pro Bild)<br>• Keine Internetverbindung</div>`;}
   btn.innerHTML='Erneut analysieren ↗';btn.disabled=false;
 }
 
